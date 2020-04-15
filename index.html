@@ -1,0 +1,749 @@
+<!DOCTYPE HTML>
+<html>
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0">
+	<title>fractal.gen</title>
+	<style>
+		html, body {
+			margin: 0px;
+			padding: 0px;
+			border: 0px;
+			width: 100%;
+			height: 100%;
+			overflow: hidden;
+			background-color: #000000;
+		}
+		canvas {
+			width: 100%;
+			height: 100%;
+		}
+		#controlPanel {
+			position: fixed;
+			right: 0.5em;
+			bottom: 0.5em;
+			font-size: 1em;
+			background-color: rgba(255, 255, 255, 0.7);
+			border-radius: 4px;
+			padding: 4px;
+		}
+		table {
+			border-collapse: collapse;
+		}
+		td {
+			text-align: right;
+			padding: 0px 4px 0px 4px;
+		}
+		input {
+			width: 16em;
+			font-size: 0.85em;
+		}
+		select {
+			width: 16em;
+			font-size: 0.85em;
+		}
+		button {
+			font-size: 0.85em;
+		}
+		input[readonly] {
+			background-color: rgb(230, 230, 230);
+		}
+	</style>
+</head>
+
+<body onload="init()">
+	<canvas></canvas>
+	<div id="controlPanel">
+		<table>
+		<tr>
+			<td>Template</td>
+			<td><select id="predef" onchange="usePredefinedGenerator()"></select></td>
+		</tr>
+		<tr>
+			<td>G(z)</td>
+			<td><input type="text" id="__G__" placeholder="vec2" /></td>
+		</tr>
+		<tr>
+			<td>z0</td>
+			<td><input type="text" id="__Z0__" placeholder="vec2" /></td>
+		</tr>
+		<tr>
+			<td>R</td>
+			<td><input type="text" id="__R__" placeholder="float" /></td>
+		</tr>
+		<tr>
+			<td>N</td>
+			<td><input type="text" id="__N__" placeholder="int" /></td>
+		</tr>
+		<tr>
+			<td>RGB(k)</td>
+			<td><input type="text" id="__RGB__" placeholder="vec3" /></td>
+		</tr>
+		<tr>
+			<td>Origin</td>
+			<td><input type="text" id="__ORIGIN__" placeholder="vec2" /></td>
+		</tr>
+		<tr>
+			<td>Scale</td>
+			<td><input type="text" id="__SCALE__" placeholder="float" /></td>
+		</tr>
+		<tr>
+			<td>Rotation</td>
+			<td><input type="text" id="__ROTATION__" placeholder="float" /></td>
+		</tr>
+		<tr>
+			<td></td>
+			<td><button onclick="createProgram()"/>Update</button><button onclick="createProgram(true)"/>Restart</button></td>
+		</tr>
+		<tr>
+			<td>Translation</td>
+			<td><input type="text" id="origin" value="c(0, 0)" readonly /></td>
+		</tr>
+		<tr>
+			<td>Zoom</td>
+			<td><input type="text" id="zoom" value="exp(0.000)" readonly /></td>
+		</tr>
+		<table>
+	</div>
+
+	<script id="vs" type="x-shader/vertex">
+		attribute vec3 position;
+		void main() {
+			gl_Position = vec4(position, 1.);
+		}
+	</script>
+
+	<script id="fs" type="x-shader/fragment">
+		#ifdef GL_ES
+			precision highp float;
+		#endif
+
+		uniform float t; // in seconds
+		uniform vec2 resolution; // in pixels
+		uniform vec2 origin; // complex plane coordinates
+		uniform float zoom; // default = 0.0, zoom in < 0, zoom out > 0
+
+		#define c(r, i) vec2((r), (i))
+		#define rgb(r, g, b) vec3((r), (g), (b))
+
+		const float pi = 3.14159265359;
+		const float e = exp(1.);
+		const vec2 zero = c(0., 0.);
+		const vec2 one = c(1., 0.);
+		const vec2 i = c(0., 1.);
+
+		float sinh(float x) {
+			float eminx = exp(-x);
+			return (1. - eminx * eminx) / (2. * eminx);
+		}
+
+		float cosh(float x) {
+			float eminx = exp(-x);
+			return (1. + eminx * eminx) / (2. * eminx);
+		}
+
+		float tanh(float x) {
+			float emin2x = exp(-2. * x);
+			return (1. - emin2x) / (1. + emin2x);
+		}
+
+		vec2 cadd(vec2 a, vec2 b) {
+			return a + b;
+		}
+
+		vec2 csub(vec2 a, vec2 b) {
+			return a - b;
+		}
+
+		vec2 cmul(vec2 a, vec2 b) {
+			return vec2(a.x * b.x - a.y * b.y, a.y * b.x + a.x * b.y);
+		}
+
+		vec2 cdiv(vec2 a, vec2 b) {
+			float divisor = b.x * b.x + b.y * b.y;
+			if (divisor == 0.) return zero;
+			return vec2((a.x * b.x + a.y * b.y) / divisor, (a.y * b.x - a.x * b.y) / divisor);
+		}
+
+		vec2 cinv(vec2 z) {
+			return cdiv(one, z);
+		}
+
+		vec2 cconj(vec2 z) {
+			return vec2(z.x, -z.y);
+		}
+
+		float cabs2(vec2 z) {
+			return z.x * z.x + z.y * z.y;
+		}
+
+		float cabs(vec2 z) {
+			return sqrt(cabs2(z));
+		}
+
+		float carg(vec2 z) {
+			return atan(z.y, z.x);
+		}
+
+		vec2 cis(float angle) {
+			return vec2(cos(angle), sin(angle));
+		}
+
+		vec2 cexp(vec2 z) {
+			return exp(z.x) * vec2(cos(z.y), sin(z.y));
+		}
+
+		vec2 clog(vec2 z) {
+			return vec2(log(cabs(z)), carg(z));
+		}
+
+		vec2 cpow(vec2 z, vec2 w) {
+			return cexp(cmul(w, clog(z)));
+		}
+
+		vec2 csqrt(vec2 z) {
+			float r = cabs(z);
+			float a = sqrt((r + z.x) / 2.);
+			float b = sqrt((r - z.x) / 2.);
+			return vec2(a, z.y >= 0. ? b : -b);
+		}
+
+		// Trigonometric functions
+
+		vec2 csin(vec2 z) {
+			return vec2(sin(z.x) * cosh(z.y), cos(z.x) * sinh(z.y));
+		}
+
+		vec2 ccos(vec2 z) {
+			return vec2(cos(z.x) * cosh(z.y), -sin(z.x) * sinh(z.y));
+		}
+
+		vec2 ctan(vec2 z) {
+			return cdiv(csin(z), ccos(z));
+		}
+
+		vec2 ccot(vec2 z) {
+			return cdiv(ccos(z), csin(z));
+		}
+
+		vec2 csec(vec2 z) {
+			return cinv(ccos(z));
+		}
+
+		vec2 ccsc(vec2 z) {
+			return cinv(csin(z));
+		}
+
+		// Inverse trigonometric functions
+
+		vec2 casin(vec2 z) {
+			return cmul(-i, clog(cmul(i, z) + csqrt(one - cmul(z, z))));
+		}
+
+		vec2 cacos(vec2 z) {
+			return cmul(-i, clog(z + csqrt(cmul(z, z) - one)));
+		}
+
+		vec2 catan(vec2 z) {
+			vec2 iz = cmul(i, z);
+			return cmul(0.5 * i, clog(one - iz) - clog(one + iz));
+		}
+
+		vec2 cacot(vec2 z) {
+			return catan(cinv(z));
+		}
+
+		vec2 casec(vec2 z) {
+			return cacos(cinv(z));
+		}
+
+		vec2 cacsc(vec2 z) {
+			return casin(cinv(z));
+		}
+
+		// Hyperbolic functions
+
+		vec2 csinh(vec2 z) {
+			return vec2(sinh(z.x) * cos(z.y), cosh(z.x) * sin(z.y));
+		}
+
+		vec2 ccosh(vec2 z) {
+			return vec2(cosh(z.x) * cos(z.y), sinh(z.x) * sin(z.y));
+		}
+
+		vec2 ctanh(vec2 z) {
+			return cdiv(csinh(z), ccosh(z));
+		}
+
+		vec2 ccoth(vec2 z) {
+			return cdiv(ccosh(z), csinh(z));
+		}
+
+		vec2 csech(vec2 z) {
+			return cinv(ccosh(z));
+		}
+
+		vec2 ccsch(vec2 z) {
+			return cinv(csinh(z));
+		}
+
+		// Inverse hyperbolic functions
+
+		vec2 casinh(vec2 z) {
+			return clog(z + csqrt(cmul(z, z) + one));
+		}
+
+		vec2 cacosh(vec2 z) {
+			return clog(z + cmul(csqrt(z + one), csqrt(z - one)));
+		}
+
+		vec2 catanh(vec2 z) {
+			return 0.5 * (clog(one + z) - clog(one - z));
+		}
+
+		vec2 cacoth(vec2 z) {
+			return catanh(cinv(z));
+		}
+
+		vec2 casech(vec2 z) {
+			return cacosh(cinv(z));
+		}
+
+		vec2 cacsch(vec2 z) {
+			return casinh(cinv(z));
+		}
+
+		void main(void) {
+			float length = (__SCALE__) * exp(zoom);
+			vec2 scale;
+			if (resolution.x >= resolution.y) {
+				scale = vec2(length * resolution.x / resolution.y, length);
+			} else {
+				scale = vec2(length, length * resolution.y / resolution.x);
+			}
+			vec2 px = (gl_FragCoord.xy / resolution.xy - vec2(0.5, 0.5)) * scale;
+			float angle = __ROTATION__;
+			px = vec2(px.x * cos(angle) + px.y * sin(angle), - px.x * sin(angle) + px.y * cos(angle));
+			px = px + (__ORIGIN__) + origin;
+
+			float R = __R__;
+			float RR = R * R;
+			const int N = __N__;
+			vec2 z = __Z0__;
+			float k = float(N);
+
+			for (int j = 0; j < N; j++) {
+				z = __G__;
+				if (cabs2(z) > RR) {
+					k = float(j);
+					break;
+				}
+			}
+
+			if (cabs2(z) > RR) {
+				k = k + 1. - log(0.5*log(cabs2(z)) / log(R));
+				float kn = k / float(N);
+				gl_FragColor = vec4(__RGB__, 1.);
+			} else {
+				gl_FragColor = vec4(0., 0., 0., 1.);
+			}
+		}
+	</script>
+
+	<script>
+			var canvas, gl, buffer, currentProgram, vertex_position, mouse,
+			    timeLocation, resolutionLocation, originLocation, zoomLocation,
+					mouse = { down: false, x: 0, y: 0, moved: false },
+			    parameters = {  startTime   : new Date().getTime() / 1000.0,
+			                    time        : 0,
+			                    screenWidth : 0,
+			                    screenHeight: 0,
+													originX     : 0,
+													originY     : 0,
+													zoom        : 0 }
+			var fsParamIds = ['__G__', '__Z0__', '__R__', '__N__', '__RGB__', '__ORIGIN__', '__SCALE__', '__ROTATION__']
+			var predefinedGenerators = [
+				{
+					name: "Julia",
+					__G__: 'cmul(z, z) + c(cos(t * 0.8), sin(t * 0.8)) * 0.7885',
+					__Z0__: 'px',
+					__R__: '2.',
+					__N__: '100',
+					__RGB__: 'rgb(0.4*(1.+sin(2.*pi*kn)), 0.4*(1.+sin(2.*pi*kn+pi/2.)), 0.4*(1.+sin(2.*pi*kn+pi)))',
+					__ORIGIN__: 'zero',
+					__SCALE__: '3.',
+					__ROTATION__: '0.'
+				},
+				{
+					name: "Julia 2",
+					__G__: 'cmul(z, z) + c(-0.74543, 0.11301)',
+					__Z0__: 'px',
+					__R__: '2.',
+					__N__: '200',
+					__RGB__: 'rgb(0.5*(1.+cos(2.*pi*kn)), 0.5*(1.+cos(2.*pi*kn+pi/2.)), 0.5*(1.+cos(2.*pi*kn+pi)))',
+					__ORIGIN__: 'zero',
+					__SCALE__: '2.',
+					__ROTATION__: '0.'
+				},
+				{
+					name: 'Mandelbrot',
+					__G__: 'cmul(z, z) + px',
+					__Z0__: 'zero',
+					__R__: '2.',
+					__N__: '200',
+					__RGB__: 'rgb(1. - kn * kn, 1. - kn, 1. - kn * kn)',
+					__ORIGIN__: 'c(-0.3738, -0.0512011)',
+					__SCALE__: '2.5',
+					__ROTATION__: '0.'
+				},
+				{
+					name: 'Inverse Mandelbrot',
+					__G__: 'cmul(z, z) + cinv(px)',
+					__Z0__: 'c(cos(pi*t/2.), sin(pi*t/2.)) * 0.3',
+					__R__: '10.',
+					__N__: '50',
+					__RGB__: 'rgb(1. - kn * kn, 1. - kn, 1. - 1. / kn)',
+					__ORIGIN__: 'c(0.5, 0.)',
+					__SCALE__: '4.',
+					__ROTATION__: '0.'
+				},
+				{
+					name: 'Wolfram Wires',
+					__G__: 'cmul(z, z) + ctan(cinv(px))',
+					__Z0__: 'zero',
+					__R__: '2.',
+					__N__: '50',
+					__RGB__: 'rgb(1. - kn * kn, 1. - kn, 1. - 1. / kn)',
+					__ORIGIN__: 'zero',
+					__SCALE__: '8./(1. + exp(0.3*mod(t,25.)))',
+					__ROTATION__: '0.'
+				},
+				{
+					name: 'Wolfram Wires 2',
+					__G__: 'cmul(z, z) + ctan(cinv(px))',
+					__Z0__: 'c(sin(t*2.)*0.1, 0)',
+					__R__: '2.',
+					__N__: '50',
+					__RGB__: 'rgb(1. - kn * kn, 1. - kn, 1. - 1. / kn)',
+					__ORIGIN__: 'zero',
+					__SCALE__: '0.7',
+					__ROTATION__: '0.'
+				},
+				{
+					name: "Vertigo",
+					__G__: 'cmul(z, z) + c(0.4731, 0.1577)',
+					__Z0__: 'px',
+					__R__: '2.',
+					__N__: '100',
+					__RGB__: 'rgb(0.4*(1.+sin(2.*pi*kn)), 0.4*(1.+sin(2.*pi*kn+pi/2.)), 0.4*(1.+sin(2.*pi*kn+pi)))',
+					__ORIGIN__: 'c(0.3417146107450364, 0.4981508965195181)',
+					__SCALE__: 'exp(cos(t * 1.3) * 8. - 5.5)',
+					__ROTATION__: '-t * 3.'
+				},
+				{
+					name: 'Soup',
+					__G__: 'cmul(z, ccos(z)) + px',
+					__Z0__: 'c(cos(t * 0.2), sin(t*0.2)) * cos(t)',
+					__R__: '1e5',
+					__N__: '20',
+					__RGB__: 'rgb(sin(pi*kn), 0.5, cos(kn)*cos(t))',
+					__ORIGIN__: 'zero',
+					__SCALE__: '7.',
+					__ROTATION__: '0.'
+				},
+				{
+					name: 'Salty Soup',
+					__G__: 'cmul(z, ccos(z)) + px',
+					__Z0__: 'c(cos(t * 0.2), sin(t*0.2)) * cos(t)',
+					__R__: '1e5',
+					__N__: '20',
+					__RGB__: 'rgb(sin(pi*kn), 0.5, cos(kn)*cos(t))',
+					__ORIGIN__: 'zero',
+					__SCALE__: '7.',
+					__ROTATION__: 'sin(cabs(px))*cos(t*3.)*0.4'
+				},
+				{
+					name: 'Trippy Soup',
+					__G__: 'cmul(z, ccos(z)) + px',
+					__Z0__: 'c(cos(t * 0.2), sin(t*0.2)) * cos(t)',
+					__R__: '1e5',
+					__N__: '20',
+					__RGB__: 'rgb(sin(pi*kn), 0.5, cos(kn)*cos(t))',
+					__ORIGIN__: 'zero',
+					__SCALE__: '8. + exp(mod(t,45.)/3.)',
+					__ROTATION__: 'sin(px.x)*cos(t) + cos(px.y)*sin(t)'
+				},
+				{
+					name: 'Angry Bird',
+					__G__: 'cpow(z, c(pow(2.2, log(1.0+1.0/cabs(px))), 0)) + cmul(i,px)',
+					__Z0__: 'c(cos(t)*cos(t)*0.3, 0)',
+					__R__: '2.',
+					__N__: '50',
+					__RGB__: 'rgb(1. / kn, 1. - kn, 1. - 1. / kn)',
+					__ORIGIN__: 'c(0, 0.1)',
+					__SCALE__: '2.5',
+					__ROTATION__: '0.'
+				},
+				{
+					name: 'Butterfly',
+					__G__: 'cmul(z,z) + cinv(csin(cinv(px)))',
+					__Z0__: 'c(cos( 1./(0.5+abs(sin(t)))*t/10. ), 0)',
+					__R__: '2.',
+					__N__: '70',
+					__RGB__: 'rgb(sin(px.x + t*2.0) * 0.5 + 0.5, 1. - kn, kn)',
+					__ORIGIN__: 'c(-0.3, 0)',
+					__SCALE__: '2.5',
+					__ROTATION__: '0.'
+				},
+				{
+					name: 'Ouroboros',
+					__G__: 'cmul(z,z) + cmul(z, cmul(z,z)) + 2.*px',
+					__Z0__: 'zero',
+					__R__: '2.',
+					__N__: '50',
+					__RGB__: 'rgb(1. - kn * kn, 1. - kn, 1. - 1. / kn)',
+					__ORIGIN__: 'zero',
+					__SCALE__: '1.3',
+					__ROTATION__: 't * sin(10. * cabs(px)) * 5.'
+				},
+				{
+					name: 'Op-art',
+					__G__: 'cmul(z,z) + cmul(z, cmul(z,z)) + 2.*px',
+					__Z0__: 'zero',
+					__R__: '2.',
+					__N__: '50',
+					__RGB__: 'rgb(1. - kn * kn, 1. - kn, 1. - 1. / kn)',
+					__ORIGIN__: 'zero',
+					__SCALE__: '1.2',
+					__ROTATION__: 't * exp(10. * cabs(px)) * 5.'
+				},
+				{
+					name: 'Bat',
+					__G__: 'cpow(z, c(2.2*cabs(cmul(i,px)), 0)) + cmul(i,px)',
+					__Z0__: 'c(0.5*cos(t), 0)',
+					__R__: '2.',
+					__N__: '50',
+					__RGB__: 'rgb(sin(pi*kn), 0, cos(kn))',
+					__ORIGIN__: 'zero',
+					__SCALE__: '3.',
+					__ROTATION__: '0.'
+				}
+			]
+
+			function init() {
+				canvas = document.querySelector('canvas')
+				canvas.addEventListener('wheel', onWheel, false)
+				canvas.addEventListener('mousedown', onMouseDown, false)
+				canvas.addEventListener('mousemove', onMouseMove, false)
+				canvas.addEventListener('mouseup', onMouseUp, false)
+				canvas.addEventListener('mouseleave', onMouseLeave, false)
+				canvas.addEventListener('click', onClick, false)
+				const predefSelect = document.getElementById('predef')
+				predefinedGenerators.forEach(function(gen, index) {
+					var option = document.createElement("option");
+					option.text = gen.name
+					option.value = '' + index
+					predefSelect.appendChild(option)
+				})
+				try {
+					gl = canvas.getContext('webgl')
+				} catch(error) {}
+				if (!gl) {
+					throw "Cannot create WebGL context!"
+				}
+				buffer = gl.createBuffer()
+				gl.bindBuffer(gl.ARRAY_BUFFER, buffer)
+				gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([ - 1.0, - 1.0, 1.0, - 1.0, - 1.0, 1.0, 1.0, - 1.0, 1.0, 1.0, - 1.0, 1.0 ]), gl.STATIC_DRAW)
+				usePredefinedGenerator(predefinedGenerators[0])
+				animate()
+			}
+
+			function usePredefinedGenerator(def) {
+				if (!def) {
+					def = predefinedGenerators[parseInt(document.getElementById('predef').value)]
+				}
+				fsParamIds.forEach(function(id) {
+					document.getElementById(id).value = def[id]
+				})
+				createProgram(true)
+			}
+
+			function createProgram(restart) {
+				var vertexSource = document.getElementById('vs').textContent
+				var fragmentSource = document.getElementById('fs').textContent
+				fsParamIds.forEach(function(id) {
+					fragmentSource = fragmentSource.replace(id, document.getElementById(id).value)
+				})
+
+				var program = gl.createProgram()
+				var vs = createShader(vertexSource, gl.VERTEX_SHADER)
+				var fs = createShader(fragmentSource, gl.FRAGMENT_SHADER)
+				if (vs == null || fs == null) return null
+
+				gl.attachShader(program, vs)
+				gl.attachShader(program, fs)
+				gl.deleteShader(vs)
+				gl.deleteShader(fs)
+				gl.linkProgram(program)
+
+				if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+					alert("ERROR:\n" +
+					"VALIDATE_STATUS: " + gl.getProgramParameter(program, gl.VALIDATE_STATUS) + "\n" +
+					"ERROR: " + gl.getError() + "\n\n" +
+					"- Vertex Shader -\n" + vertex + "\n\n" +
+					"- Fragment Shader -\n" + fragment);
+					return null;
+				}
+
+				currentProgram = program
+				timeLocation = gl.getUniformLocation(currentProgram, 't')
+				resolutionLocation = gl.getUniformLocation(currentProgram, 'resolution')
+				originLocation = gl.getUniformLocation(currentProgram, 'origin')
+				zoomLocation = gl.getUniformLocation(currentProgram, 'zoom')
+				if (restart) {
+					parameters.startTime = new Date().getTime() / 1000.0
+					parameters.originX = 0
+					parameters.originY = 0
+					showOrigin()
+					parameters.zoom = 0
+					showZoom()
+				}
+			}
+
+			function createShader(src, type) {
+				var shader = gl.createShader(type)
+				gl.shaderSource(shader, src)
+				gl.compileShader(shader)
+				if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+					alert((type == gl.VERTEX_SHADER ? "VERTEX" : "FRAGMENT") + " SHADER:\n" + gl.getShaderInfoLog(shader))
+					return null
+				}
+				return shader
+			}
+
+			function animate() {
+				resizeCanvas()
+				render()
+				requestAnimationFrame(animate)
+			}
+
+			function resizeCanvas(event) {
+				if (canvas.width != canvas.clientWidth ||
+					 canvas.height != canvas.clientHeight) {
+					canvas.width = canvas.clientWidth
+					canvas.height = canvas.clientHeight
+					parameters.screenWidth = canvas.width
+					parameters.screenHeight = canvas.height
+					gl.viewport(0, 0, canvas.width, canvas.height)
+				}
+			}
+
+			function showOrigin() {
+				document.getElementById('origin').value = 'c(' + parameters.originX + ', ' + parameters.originY + ')'
+			}
+
+			function showZoom() {
+				document.getElementById('zoom').value = 'exp(' + parameters.zoom.toFixed(3) + ')'
+			}
+
+			function onWheel(event) {
+				parameters.zoom += event.deltaY * 0.001
+				parameters.zoom = Math.max(Math.min(parameters.zoom, 15), -15)
+				showZoom()
+			}
+
+			let staticValues = [
+				['__ORIGIN__', 'zero'],
+				['__SCALE__', '1.'],
+				['__ROTATION__', '0.']
+			]
+
+			function onMouseDown(event) {
+				if (event.button != 0) return
+				let someNotStatic = staticValues.some(function(keyValue) {
+					return document.getElementById(keyValue[0]).value != keyValue[1]
+				})
+				if (someNotStatic) {
+					// preserve scale if easily parseable
+					let scale = parseFloat(document.getElementById('__SCALE__').value)
+					if (!isNaN(scale)) {
+						parameters.zoom += Math.log(scale)
+						parameters.zoom = Math.max(Math.min(parameters.zoom, 15), -15)
+						showZoom()
+					}
+					staticValues.forEach(function(keyValue) {
+						document.getElementById(keyValue[0]).value = keyValue[1]
+					})
+					createProgram()
+				}
+				mouse.down = true
+				mouse.x = event.clientX
+				mouse.y = event.clientY
+				mouse.moved = false
+			}
+
+			function onMouseMove(event) {
+				if (mouse.down && (event.clientX != mouse.x || event.clientY != mouse.y)) {
+					let dx = event.clientX - mouse.x
+					let dy = mouse.y - event.clientY
+					let dpos = transformPixelsToWorld(-dx, -dy)
+					parameters.originX += dpos.x
+					parameters.originY += dpos.y
+					mouse.x = event.clientX
+					mouse.y = event.clientY
+					mouse.moved = true
+					showOrigin()
+				}
+			}
+
+			function onMouseUp(event) {
+				mouse.down = false
+			}
+
+			function onMouseLeave(event) {
+				mouse.down = false
+			}
+
+			function onClick(event) {
+				if (!mouse.moved) {
+					let dx = event.clientX - 0.5 * canvas.clientWidth
+					let dy = 0.5 * canvas.clientHeight - event.clientY
+					let dpos = transformPixelsToWorld(dx, dy)
+					parameters.originX += dpos.x
+					parameters.originY += dpos.y
+					showOrigin()
+				}
+			}
+
+			function transformPixelsToWorld(dx, dy) {
+				dx /= canvas.clientWidth
+				dy /= canvas.clientHeight
+				let scale = Math.exp(parameters.zoom)
+				if (canvas.clientWidth >= canvas.clientHeight) {
+					dx *= scale * canvas.clientWidth / canvas.clientHeight
+					dy *= scale
+				} else {
+					dx *= scale
+					dy *= scale * canvas.clientHeight / canvas.clientWidth
+				}
+				return { x: dx, y: dy }
+			}
+
+			function render() {
+				if (!currentProgram) return
+				parameters.time = new Date().getTime() / 1000.0 - parameters.startTime
+				gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
+				gl.useProgram(currentProgram)
+				gl.uniform1f(timeLocation, parameters.time)
+				gl.uniform2f(resolutionLocation, parameters.screenWidth, parameters.screenHeight)
+				gl.uniform2f(originLocation, parameters.originX, parameters.originY)
+				gl.uniform1f(zoomLocation, parameters.zoom)
+				gl.bindBuffer(gl.ARRAY_BUFFER, buffer)
+				gl.vertexAttribPointer(vertex_position, 2, gl.FLOAT, false, 0, 0)
+				gl.enableVertexAttribArray(vertex_position)
+				gl.drawArrays(gl.TRIANGLES, 0, 6)
+				gl.disableVertexAttribArray(vertex_position)
+			}
+		</script>
+</body>
+</html>
